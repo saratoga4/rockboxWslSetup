@@ -39,9 +39,6 @@
     When done, open the output folder and start the simulator (if built). This is
     switched on automatically when you choose a test build.
 
-.PARAMETER SimulatorArch
-    32 (recommended by the Rockbox wiki) or 64.
-
 .PARAMETER Distro
     Name of the WSL distribution to use or install. Default: Ubuntu.
 
@@ -76,8 +73,6 @@ param(
     [string[]] $Target,
     [switch]   $Simulator,
     [switch]   $ShowResults,
-    [ValidateSet('32', '64')]
-    [string]   $SimulatorArch = '32',
     [string]   $Distro = 'Ubuntu',
     [string]   $LinuxUser,
     [switch]   $UseWsl1,
@@ -223,8 +218,7 @@ function Get-RelaunchArguments {
     # Pass the answers already given, so the resumed run doesn't ask again.
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', $PSCommandPath)
     $a += @('-Target', $(if (@($Target).Count) { $Target -join ',' } else { 'none' }))
-    $a += @('-Toolchains', ($Toolchains -join ','), '-SimulatorArch', $SimulatorArch,
-            '-Distro', $Distro, '-OutputDir', $OutputDir)
+    $a += @('-Toolchains', ($Toolchains -join ','), '-Distro', $Distro, '-OutputDir', $OutputDir)
     if ($Simulator)    { $a += '-Simulator' }
     if ($ShowResults)  { $a += '-ShowResults' }
     if ($LinuxUser)    { $a += @('-LinuxUser', $LinuxUser) }
@@ -340,12 +334,22 @@ mv /etc/wsl.conf.new /etc/wsl.conf
 '@
 
 'packages.sh' = @'
+# Older versions of this setup (following the wiki) linked the Windows (MinGW) SDL2 into
+# /usr/include and /usr/lib. Those links break the native SDL2 package below (its headers
+# would be written into the MinGW copy), so remove them if they point at the MinGW SDL2.
+for f in /usr/include/SDL2 /usr/lib/libSDL2.a /usr/lib/libSDL2main.a; do
+    if [ -L "$f" ] && readlink "$f" | grep -q '^/usr/local/cross-tools/'; then
+        echo "Removing old link $f -> $(readlink "$f")"
+        rm -f "$f"
+    fi
+done
 apt-get update
 # Packages from the Rockbox wiki (libgmp-dev is the current name of libgmp3-dev),
-# plus the other tools rockboxdev.sh checks for or downloads with.
+# plus the other tools rockboxdev.sh checks for or downloads with, and libsdl2-dev
+# (sdl2-config) for building the regular (Linux) simulator.
 apt-get install -y git build-essential texinfo bison libtool autoconf flex zip libtool-bin \
     libgmp-dev libmpfr-dev libmpc-dev automake patch perl wget curl ca-certificates \
-    xz-utils bzip2 gzip
+    xz-utils bzip2 gzip libsdl2-dev
 '@
 
 'source.sh' = @'
@@ -454,26 +458,33 @@ if [ ! -f "$prefix/lib/libSDL2.a" ]; then
 else
     echo "SDL2 for $host is already built - skipping."
 fi
-# Help Rockbox's configure find the cross-compiled SDL (same links as the wiki).
-ln -sf "$prefix/bin/sdl2-config"   "/usr/bin/$host-sdl2-config"
-ln -sf "$prefix/lib/libSDL2main.a" /usr/lib/libSDL2main.a
-ln -sf "$prefix/lib/libSDL2.a"     /usr/lib/libSDL2.a
-if [ -d /usr/include/SDL2 ] && [ ! -L /usr/include/SDL2 ]; then
-    echo "WARNING: /usr/include/SDL2 is a real folder (libsdl2-dev?); not replacing it."
-else
-    ln -sfn "$prefix/include/SDL2" /usr/include/SDL2
-fi
+# Help Rockbox's configure find the cross-compiled SDL: it looks for <host>-sdl2-config on PATH.
+# sdl2-config works out SDL's location from the folder it is run from, so a plain symlink in
+# /usr/bin makes it report /usr/include and /usr/lib. The wiki works around that by linking the
+# MinGW headers and libraries into /usr, but that clashes with the native libsdl2-dev used by
+# the regular (Linux) simulator. A small wrapper that runs the real script avoids both problems.
+wrapper="/usr/bin/$host-sdl2-config"
+rm -f "$wrapper"
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$prefix/bin/sdl2-config" > "$wrapper"
+chmod 755 "$wrapper"
+echo "$wrapper reports: $("$wrapper" --cflags)"
 '@
 
 'sim.sh' = @'
-# Usage: sim.sh <target> <32|64>
-# The simulator stays in its build folder: rockboxui.exe runs from there (with simdisk/ next to it).
-target="$1"; arch="$2"
-if [ "$arch" = "64" ]; then opts="AS6"; else opts="ASW"; fi   # (A)dvanced: (S)imulator + (W)in32 / Win(6)4
-bdir="$HOME/rockbox/build-sim-$target-win$arch"
+# Usage: sim.sh <target>
+# Builds the 32-bit Windows simulator (Rockbox doesn't support a 64-bit one).
+# It stays in its build folder: rockboxui.exe runs from there (with simdisk/ next to it).
+target="$1"
+bdir="$HOME/rockbox/build-sim-$target-win32"
+# Build folders configured by older versions of this setup point at the MinGW SDL2 through
+# /usr/include/SDL2 and /usr/lib/libSDL2.a, which are no longer used. Start those over.
+if grep -qE '/usr/include/SDL2|/usr/lib/libSDL2' "$bdir/Makefile" 2>/dev/null; then
+    echo "Reconfiguring $bdir (it was set up with old SDL2 paths)."
+    rm -rf "$bdir"
+fi
 mkdir -p "$bdir"; cd "$bdir"
 if [ ! -f Makefile ]; then
-    ../tools/configure --target="$target" --type="$opts"
+    ../tools/configure --target="$target" --type=ASW   # (A)dvanced: (S)imulator + (W)in32
 fi
 make -j"$(nproc)"
 make install
@@ -782,7 +793,7 @@ function Select-TestBuild {
         $first = $ToolchainInfo[$Toolchains[0]]
         Write-Host ''
         Write-Info ('The simulator runs Rockbox for the {0} as a Windows program. Building it takes' -f $first.TestName)
-        Write-Info ('a few extra minutes. It is built in ~/rockbox/build-sim-{0}-win{1} (inside Ubuntu),' -f $first.TestTarget, $SimulatorArch)
+        Write-Info ('a few extra minutes. It is built in ~/rockbox/build-sim-{0}-win32 (inside Ubuntu),' -f $first.TestTarget)
         Write-Info 'and when the setup is done that folder opens and the simulator starts.'
         $script:Simulator = Read-YesNo 'Also build the simulator?' $false
     }
@@ -880,14 +891,13 @@ try {
     $simPath = $null; $simDir = $null
     if ($Simulator) {
         $simTarget = $Target[0]
-        $mingwHost = if ($SimulatorArch -eq '64') { 'x86_64-w64-mingw32' } else { 'i686-w64-mingw32' }
-        Write-Step "Preparing the Windows cross-compiler and SDL2 for the simulator ($SimulatorArch-bit)"
-        Invoke-LinuxScript 'sdl.sh' -AsRoot -Arguments @($mingwHost)
+        Write-Step 'Preparing the Windows cross-compiler and SDL2 for the simulator'
+        Invoke-LinuxScript 'sdl.sh' -AsRoot -Arguments @('i686-w64-mingw32')
         Write-Ok 'SDL2 ready.'
 
         Write-Step "Building the simulator for '$simTarget'"
-        Invoke-LinuxScript 'sim.sh' -Arguments @($simTarget, $SimulatorArch)
-        $simDir  = "$repoWin\build-sim-$simTarget-win$SimulatorArch"
+        Invoke-LinuxScript 'sim.sh' -Arguments @($simTarget)
+        $simDir  = "$repoWin\build-sim-$simTarget-win32"
         $simPath = "$simDir\rockboxui.exe"
         Write-Ok "Simulator built: $simPath"
     }

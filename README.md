@@ -85,7 +85,6 @@ powershell -ExecutionPolicy Bypass -File .\Setup-RockboxDev.ps1 -Toolchains arm 
 | `-Target <names>` | Build Rockbox for these players instead of the automatic test build (`ipodvideo`, `ipod6g`, `sansaclipplus`, …; separate several with commas). `none` skips building. The names are listed on the [TargetStatus](https://www.rockbox.org/wiki/TargetStatus) page and by `tools/configure`. |
 | `-Simulator` | Also build the Windows simulator, for the first player. |
 | `-ShowResults` | When done, open the output folder and start the simulator (if built). Switched on automatically when you choose a test build. |
-| `-SimulatorArch 32\|64` | 32-bit (default, recommended by the wiki) or 64-bit simulator. |
 | `-UpdateSource` | Run `git pull` on the Rockbox source first. |
 | `-OutputDir <folder>` | Where the finished files go (default `Documents\Rockbox`). |
 | `-LinuxUser <name>` | Linux user name to use or create. |
@@ -115,7 +114,15 @@ make -j$(nproc) && make zip
 ```
 
 To rebuild after changing the code, run `make -j$(nproc) && make zip` again in that
-folder. The test build folders (for example `~/rockbox/build-ipodvideo`) work the
+folder.
+
+Both kinds of simulator can be built:
+- **Linux simulator:** choose **S** (Simulator) in `configure`, then run `make` and
+  `make install`. The script installs Ubuntu's `libsdl2-dev` for this. It runs inside
+  Ubuntu; recent WSL versions show its window on the Windows desktop.
+- **Windows simulator (`rockboxui.exe`):** choose **A** (Advanced), then **S** and **W**.
+  This needs the cross-compiled Windows SDL2, which the script sets up when you choose
+  the simulator. The test build folders (for example `~/rockbox/build-ipodvideo`) work the
 same way.
 
 New to this, or not sure what to answer in `configure`? The Rockbox wiki's
