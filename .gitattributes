@@ -1,0 +1,4 @@
+* text=auto
+# Windows scripts: always check out with CRLF line endings (cmd.exe expects them).
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
